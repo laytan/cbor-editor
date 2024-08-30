@@ -54,6 +54,7 @@ do_frame :: proc() {
 	frame_time = new_frame_time
 
 	frame(f32(time.duration_seconds(dt)))
+	glfw.WaitEvents()
 }
 
 os_get_render_bounds :: proc() -> (width, height: u32) {

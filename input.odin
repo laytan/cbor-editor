@@ -8,6 +8,8 @@ import fs "vendor:fontstash"
 
 import    "r"
 
+import clay "clay/bindings/odin/clay-odin"
+
 Input :: struct {
     keys:     bit_set[Key],
 	new_keys: bit_set[Key],
@@ -272,6 +274,8 @@ i_move :: proc(pos: [2]i32) {
 		idx := cursor_to_buffer_idx()
 		state.editor.selection[1] = idx
 	}
+
+	clay.SetPointerPosition(linalg.array_cast(state.inp.cursor, f32) * state.renderer.dpi)
 }
 
 i_scroll :: proc(delta: [2]f64) {

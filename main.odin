@@ -15,6 +15,8 @@ import    "vendor:wgpu"
 
 import    "r"
 
+import clay "clay/bindings/odin/clay-odin"
+
 state: struct {
 	ctx:            runtime.Context,
 
@@ -54,6 +56,12 @@ main :: proc() {
 	edit.move_to(&state.editor, .End)
 
 	append(&state.file_path, "scratch.cbor")
+
+	r.clay_init(&state.fs_renderer, &state.sprites)
+	min_memory_size := clay.MinMemorySize()
+	arena := clay.CreateArenaWithCapacityAndMemory(min_memory_size, make([^]byte, min_memory_size))
+	clay.Initialize(arena)
+	clay.SetMeasureTextFunction(r.clay_measure_text)
 
 	os_init()
 
@@ -175,6 +183,8 @@ CBOR :: `{
 // - Cmd+foo keybinds on MacOS
 
 frame :: proc(dt: f32) {
+	context = state.ctx
+
 	defer free_all(context.temp_allocator)
 	defer state.inp.new_keys = {}
 	clear(&state.sprites)
@@ -185,27 +195,123 @@ frame :: proc(dt: f32) {
 
 	state.editor.current_time._nsec += i64(dt*1e9)
 
-	sprites: [dynamic]r.Sprite_Data
-	sprites.allocator = context.temp_allocator
+	text := strings.to_string(state.builder)
 
-	{
-		fs   := &state.fs_renderer
-		text := string(state.file_path[:])
-		r.fs_draw_text(fs, text, pos={PADDING, PADDING}, size=FONT_SIZE, font=.UI, align_v=.Top)
-	}
+	fs := &state.fs_renderer
+	r.fs_apply(fs, size=16)
+	lh := r.fs_lh(fs)
 
-	SCROLLBAR_WIDTH  :: 16
-	{
-		text := strings.to_string(state.builder)
+	RED :: [4]f32{0, 0, 255, 255}
 
-		fs := &state.fs_renderer
-		r.fs_apply(fs, size=16)
-		lh := r.fs_lh(fs)
+	clay.BeginLayout(i32(_sc_width), i32(_sc_height))
+	if clay.Rectangle(clay.ID("screen"), clay.Layout({ sizing = { width = clay.SizingFixed(sc_width), height = clay.SizingFixed(sc_height) } }), clay.RectangleConfig({})) {
+		if clay.Rectangle(clay.ID("main"), clay.Layout({ padding = {16, 16}, layoutDirection = .TOP_TO_BOTTOM, sizing = { width = clay.SizingGrow({}), height = clay.SizingGrow({}) } }), clay.RectangleConfig({})) {
+			if clay.Rectangle(clay.ID("top"), clay.Layout({ sizing = { width = clay.SizingGrow({}) } }), clay.RectangleConfig({})) {
+				clay.Text(clay.ID("title"), clay.MakeString(string(state.file_path[:])), clay.TextConfig(UI_TEXT))
+				if clay.Rectangle(clay.ID("right"), clay.Layout({ sizing = { width = clay.SizingGrow({}) }, childAlignment = { x = .RIGHT }, childGap = 16 }), clay.RectangleConfig({})) {
 
+					when #defined(os_open) {
+						if Button("Open") do os_open()
+					}
 
-		// Scrollbar
-		{
-			SCROLLBAR_HEIGHT :: 64
+					when #defined(os_save) {
+						if Button("Save") {
+							t: Tokenizer
+							t.source = string(state.builder.buf[:])
+							t.full   = t.source
+							t.line   = 1
+							val, ok := parse(&t, context.temp_allocator)
+							assert(ok)
+							data, err := cbor.encode(val, cbor.ENCODE_FULLY_DETERMINISTIC, context.temp_allocator)
+							assert(err == nil)
+							os_save(data)
+						}
+					}
+
+					when #defined(os_save_as) {
+						if Button("Save As") {
+							t: Tokenizer
+							t.source = string(state.builder.buf[:])
+							t.full   = t.source
+							t.line   = 1
+							val, ok := parse(&t, context.temp_allocator)
+							assert(ok)
+							data, err := cbor.encode(val, cbor.ENCODE_FULLY_DETERMINISTIC, context.temp_allocator)
+							assert(err == nil)
+							os_save_as(data)
+						}
+					}
+				}
+			} // top
+
+			pos := -f32(state.inp.scroll.y)
+			r.fs_draw_text(fs, text, pos={0, pos}, size=16, color={166, 218, 149, 255}, align_v=.Top)
+
+			caret, selection_end := edit.sorted_selection(&state.editor)
+
+			line := strings.count(text[:caret], "\n")
+			y := f32(line) * lh - f32(state.inp.scroll.y)
+
+			current_line_start := max(0, strings.last_index_byte(text[:caret], '\n'))
+			current_line := strings.trim(text[current_line_start:caret], "\n")
+			x := r.fs_width(fs, current_line)
+
+			caret_pos := [2]f32{x, y}
+			append(&state.sprites, r.Sprite_Data{
+				location = {4*17, 2*17},
+				size     = {16, 16},
+				anchor   = {0, 0},
+				position = caret_pos,
+				scale    = {16/16, lh/16},
+				rotation = 0,
+				color    = 0xAAa6da95,
+			})
+
+			if selection_end > caret {
+				selected := text[caret:selection_end]
+				start := caret_pos
+				for line in strings.split_lines_iterator(&selected) {
+					width := r.fs_width(&state.fs_renderer, line)
+
+					append(&state.sprites, r.Sprite_Data{
+						location = {4*17, 2*17},
+						size     = {16, 16},
+						anchor   = {0, 0},
+						position = start,
+						scale    = {width/16, lh/16},
+						rotation = 0,
+						color    = 0x66a6da95,
+					})
+
+					start.x  = 0
+					start.y += lh
+				}
+			}
+
+			if clay.Rectangle(clay.ID("bottom"), clay.Layout({ sizing = { width = clay.SizingGrow({}), height = clay.SizingGrow({}) }, childAlignment = { x = .RIGHT, y = .BOTTOM } }), clay.RectangleConfig({})) {
+				// FPS over last 30 frames.
+				@static frame_times: [30]f32
+				@static frame_times_idx: int
+
+				frame_times[frame_times_idx % len(frame_times)] = dt
+				frame_times_idx += 1
+
+				frame_time: f32
+				for time in frame_times {
+					frame_time += time
+				}
+
+				buf: [24]byte
+				fps := strconv.itoa(buf[:], int(math.round(len(frame_times)/frame_time)))
+				clay.Text(clay.ID("fps"), clay.MakeString(fps), clay.TextConfig(UI_TEXT))
+			} // bottom
+		} // main
+
+		SCROLLBAR_WIDTH        :: 16
+		SCROLLBAR_THUMB_HEIGHT :: 64
+		SCROLLBAR_COLOR        :: [4]f32{244, 138, 173, 100}
+		SCROLLBAR_THUMB_COLOR  :: [4]f32{244, 138, 173, 255}
+		if clay.Rectangle(clay.ID("scrollbar"), clay.Layout({ sizing = { width = clay.SizingFixed(SCROLLBAR_WIDTH), height = clay.SizingGrow({}) }, layoutDirection = .TOP_TO_BOTTOM }), clay.RectangleConfig({ color = SCROLLBAR_COLOR })) {
 
 			lines      := f32(strings.count(text, "\n"))
 			max_scroll := f64((lines+1) * lh - sc_height)
@@ -215,186 +321,46 @@ frame :: proc(dt: f32) {
 
 			lines_scrolled := f32(state.inp.scroll.y) / lh
 			percentage     := clamp(lines_scrolled / (lines - sc_height / lh), 0, 1)
-			thumb_y        := percentage * sc_height - SCROLLBAR_HEIGHT/2
+			thumb_y        := percentage * sc_height - SCROLLBAR_THUMB_HEIGHT/2
 
-			append(&state.sprites, r.Sprite_Data{
-				location = {4*17, 2*17},
-				size     = {16, 16},
-				anchor   = {0, 0},
-				position = {sc_width-SCROLLBAR_WIDTH, 0},
-				scale    = {SCROLLBAR_WIDTH/16, sc_height/16},
-				rotation = 0,
-				color    = 0x66000000,
-			})
+			fmt.println(thumb_y)
 
-			append(&state.sprites, r.Sprite_Data{
-				location = {4*17, 2*17},
-				size     = {16, 16},
-				anchor   = {0, 0},
-				position = {sc_width-SCROLLBAR_WIDTH, thumb_y},
-				scale    = {SCROLLBAR_WIDTH/16, SCROLLBAR_HEIGHT/16},
-				rotation = 0,
-				color    = 0xff5e6166,
-			})
-		}
-
-		pos := -f32(state.inp.scroll.y)
-		r.fs_draw_text(fs, text, pos={0, pos}, size=16, color={166, 218, 149, 255}, align_v=.Top)
-
-		caret, selection_end := edit.sorted_selection(&state.editor)
-
-		line := strings.count(text[:caret], "\n")
-		y := f32(line) * lh - f32(state.inp.scroll.y)
-
-		current_line_start := max(0, strings.last_index_byte(text[:caret], '\n'))
-		current_line := strings.trim(text[current_line_start:caret], "\n")
-		x := r.fs_width(fs, current_line)
-
-		caret_pos := [2]f32{x, y}
-		append(&state.sprites, r.Sprite_Data{
-			location = {4*17, 2*17},
-			size     = {16, 16},
-			anchor   = {0, 0},
-			position = caret_pos,
-			scale    = {16/16, lh/16},
-			rotation = 0,
-			color    = 0xAAa6da95,
-		})
-
-		if selection_end > caret {
-			selected := text[caret:selection_end]
-			start := caret_pos
-			for line in strings.split_lines_iterator(&selected) {
-				width := r.fs_width(&state.fs_renderer, line)
-
-				append(&state.sprites, r.Sprite_Data{
-					location = {4*17, 2*17},
-					size     = {16, 16},
-					anchor   = {0, 0},
-					position = start,
-					scale    = {width/16, lh/16},
-					rotation = 0,
-					color    = 0x66a6da95,
-				})
-
-				start.x  = 0
-				start.y += lh
-			}
-		}
-	}
-
-	{
-		x := sc_width-SCROLLBAR_WIDTH
-		y := f32(0)
-		when #defined(os_open) {
-			if button("Open", &x, &y) {
-				os_open()
-			}
-			x -= PADDING
-			y  = 0
-		}
-
-		when #defined(os_save) {
-			if button("Save", &x, &y) {
-				t: Tokenizer
-				t.source = string(state.builder.buf[:])
-				t.full   = t.source
-				t.line   = 1
-				val, ok := parse(&t, context.temp_allocator)
-				assert(ok)
-				data, err := cbor.encode(val, cbor.ENCODE_FULLY_DETERMINISTIC, context.temp_allocator)
-				assert(err == nil)
-				os_save(data)
-			}
-			x -= PADDING
-			y  = 0
-		}
-
-		when #defined(os_save_as) {
-			if button("Save As", &x, &y) {
-				t: Tokenizer
-				t.source = string(state.builder.buf[:])
-				t.full   = t.source
-				t.line   = 1
-				val, ok := parse(&t, context.temp_allocator)
-				assert(ok)
-				data, err := cbor.encode(val, cbor.ENCODE_FULLY_DETERMINISTIC, context.temp_allocator)
-				assert(err == nil)
-				os_save_as(data)
-			}
-		}
-	}
-
-	// FPS over last 30 frames.
-	{
-		@static frame_times: [30]f32
-		@static frame_times_idx: int
-
-		frame_times[frame_times_idx % len(frame_times)] = dt
-		frame_times_idx += 1
-
-		frame_time: f32
-		for time in frame_times {
-			frame_time += time
-		}
-
-		buf: [24]byte
-		fps := strconv.itoa(buf[:], int(math.round(len(frame_times)/frame_time)))
-		r.fs_draw_text(&state.fs_renderer, fps, pos={sc_width-SCROLLBAR_WIDTH-16, sc_height-16}, size=16, align_v=.Bottom, align_h=.Right)
-	}
+			if clay.Rectangle(clay.ID("thumb-offset"), clay.Layout({ sizing = { height = clay.SizingFixed(thumb_y) } }), clay.RectangleConfig({})) {}
+			if clay.Rectangle(clay.ID("thumb"), clay.Layout({ sizing = { height = clay.SizingFixed(SCROLLBAR_THUMB_HEIGHT), width = clay.SizingGrow({}) } }), clay.RectangleConfig({ color = SCROLLBAR_THUMB_COLOR })) {}
+		} // scrollbar
+	} // screen
+	render_commands := clay.EndLayout(i32(_sc_width), i32(_sc_height))
+	r.clay_render(&render_commands)
 
 	r.sprite_render(&state.sprite_render, state.sprites[:])
 	r.fs_render(&state.fs_renderer)
 	r.present(&state.renderer)
 }
 
-PADDING   :: 10
+UI_TEXT :: clay.TextElementConfig{
+	fontId    = u16(r.Font.UI),
+	fontSize  = FONT_SIZE,
+	textColor = 255,
+}
+
 FONT_SIZE :: 18
 
-button :: proc(text: string, x: ^f32, y: ^f32) -> (clicked: bool) {
-	fs := &state.fs_renderer
+Button :: proc($ID: string) -> (clicked: bool) {
+	hovered := clay.PointerOver(clay.ID(ID))
 
-	r.fs_apply(fs, font=.UI, size=FONT_SIZE)
-
-	text_width  := r.fs_width(fs, text)
-	text_height := r.fs_lh(fs)
-
-	width  := text_width  + PADDING
-	height := text_height + PADDING
-
-	cursor      := linalg.to_f32(state.inp.cursor) * state.renderer.dpi
-	topleft     := [2]f32{x^-width, y^}
-	bottomright := [2]f32{x^, y^+text_height+PADDING}
-
-	hovered: bool
-
-	if cursor.x >= topleft.x && cursor.y >= topleft.y && cursor.x <= bottomright.x && cursor.y <= bottomright.y {
-		hovered = true
-		if .Mouse_Left in state.inp.new_keys {
-			clicked = true
-		}
+	if hovered && .Mouse_Left in state.inp.new_keys {
+		clicked = true
 	}
 
-	color: u32
+	color: [4]f32
 	switch {
-	case clicked: color = 0xff5f8fef
-	case hovered: color = 0xff79a1f2
-	case:         color = 0xff8aadf4
+	case clicked: color = {239,  95, 143, 255}
+	case hovered: color = {242, 121, 161, 255}
+	case:         color = {244, 138, 173, 255}
 	}
 
-	append(&state.sprites, r.Sprite_Data{
-		location = {4*17, 2*17},
-		size     = {16, 16},
-		anchor   = {0, 0},
-		position = {x^-width, y^},
-		scale    = {width/16, height/16},
-		rotation = 0,
-		color    = color,
-	})
-
-	r.fs_draw_text(fs, text, pos={x^-width+PADDING/2, y^}, font=.UI, size=FONT_SIZE, color={0, 0, 0, 255}, align_v=.Top)
-
-	x^ -= width
-	y^ += text_height
+	if clay.Rectangle(clay.ID(ID), clay.Layout({ padding = {12, 6} }), clay.RectangleConfig({ color = color })) {
+		clay.Text(clay.ID(ID + "-text"), clay.MakeString(ID), clay.TextConfig(UI_TEXT))
+	}
 	return
 }

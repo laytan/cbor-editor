@@ -240,7 +240,6 @@ fs_resize :: proc(r: ^Font_Renderer) {
 fs_write_consts :: proc(r: ^Font_Renderer) {
 	// Transformation matrix to convert from screen to device pixels and scale based on DPI.
 	fw, fh := f32(r.screen_width), f32(r.screen_height)
-	fmt.println(fw, fh)
 	transform := linalg.matrix_ortho3d(0, fw, fh, 0, -1, 1) * linalg.matrix4_scale(1/r.dpi)
 
 	wgpu.QueueWriteBuffer(r.queue, r.const_buffer, 0, &transform, size_of(transform))
@@ -352,11 +351,9 @@ fs_render :: proc(r: ^Font_Renderer) {
 
 		wgpu.RenderPassEncoderDrawIndexed(render_pass_encoder, indexCount=6, instanceCount=u32(r.font_instances.len), firstIndex=0, baseVertex=0, firstInstance=0)
 
-		wgpu.RenderPassEncoderEnd(render_pass_encoder)
-
 		sa.clear(&r.font_instances)
-		r.fs.state_count = 0
 	}
+	wgpu.RenderPassEncoderEnd(render_pass_encoder)
 	wgpu.RenderPassEncoderRelease(render_pass_encoder)
 
 	command_buffer := wgpu.CommandEncoderFinish(command_encoder, nil)
@@ -374,6 +371,7 @@ fs_apply :: proc(
     align_h: Text_Align_Horizontal = .Left,
     align_v: Text_Align_Vertical   = .Baseline,
 ) {
+	r.fs.state_count = 1
 	state := fs.__getState(&r.fs)
 	state^ = {
 		size    = size * r.dpi,

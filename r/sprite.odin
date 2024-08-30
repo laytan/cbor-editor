@@ -44,8 +44,9 @@ Sprite :: struct {
 	pipeline: wgpu.RenderPipeline,
 }
 
-Constants :: struct {
+Constants :: struct #packed {
 	texture_size:   [2]f32,
+	_:              [8]u8,
     transformation: matrix[4, 4]f32,
 }
 #assert(size_of(Constants) % 16 == 0)
@@ -68,12 +69,10 @@ sprite_init :: proc(s: ^Sprite, r: ^Renderer) {
 
 	///////////////////////////////////////////////////////////////////////////////////////////////
 
-	if s.zoom == 0 {
-		s.zoom = 1
-	}
+	assert(s.zoom == 0, "unimplemented")
 
-	w, h := f32(s.r.config.width), f32(s.r.config.height)
-	transformation := linalg.matrix_ortho3d(0, w, h, 0, -1, 1) * linalg.matrix4_scale(s.zoom)
+	w, h := f32(s.r.screen_width), f32(s.r.screen_height)
+	transformation := linalg.matrix_ortho3d(0, w, h, 0, -1, 1) * linalg.matrix4_scale(1/s.r.dpi)
 	transformation *= linalg.matrix4_translate_f32({s.translation.x, s.translation.y, 0})
 
 	///////////////////////////////////////////////////////////////////////////////////////////////
