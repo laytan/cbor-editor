@@ -1,0 +1,5 @@
+.DS_Store
+web/*
+!web/index.html
+ols.json
+*.cbor

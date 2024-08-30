@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en" style="height: 100%;">
+	<head>
+		<meta charset="UTF-8">
+		<meta name="viewport" content="width=device-width, initial-scale=1">
+		<title>CBOR</title>
+	</head>
+	<body id="body" style="height: 100%; padding: 0; margin: 0; overflow: hidden;">
+		<canvas id="wgpu-canvas" style="width: 100%; height: 100%;"></canvas>
+	
+		<script type="text/javascript" src="runtime.js"></script>
+		<script type="text/javascript" src="wgpu.js"></script>
+		<script type="text/javascript" src="clipboard.js"></script>
+		<script type="text/javascript">
+			const mem = new WebAssembly.Memory({ initial: 2000, maximum: 65536, shared: false });
+			const memInterface = new odin.WasmMemoryInterface();
+			memInterface.setMemory(mem);
+
+			const readFile = (file) => {
+				const reader = new FileReader();
+
+				reader.onload = (e) => {
+					const nameLength = new TextEncoder().encode(file.name).length;
+
+					const bytes = e.target.result;
+					const addr = memInterface.exports.os_js_file_alloc(nameLength + bytes.byteLength);
+
+					memInterface.storeString(addr, file.name);
+
+					const dst = new Uint8Array(memInterface.memory.buffer, addr + nameLength, bytes.byteLength);
+					dst.set(new Uint8Array(bytes));
+
+					memInterface.exports.os_js_file_callback(addr, nameLength, addr + nameLength, bytes.byteLength);
+				};
+
+				reader.onerror = (e) => {
+					console.error("file read failed", e);
+				};
+
+				reader.readAsArrayBuffer(file);
+			};
+
+			const canvas = document.getElementById("wgpu-canvas");
+			canvas.addEventListener("drop", (event) => {
+				event.preventDefault();
+
+				let file;
+				if (event.dataTransfer.items) {
+					const item = event.dataTransfer.items[0];
+					if (item.kind === "file") {
+						file = item.getAsFile();
+					}
+				} else {
+					const item = event.dataTransfer.files[0];
+					file = item;
+				}
+
+				if (!file) {
+					return;
+				}
+
+				readFile(file);
+			});
+			canvas.addEventListener("dragover", (event) => {
+				event.preventDefault();
+			});
+
+			const wgpuInterface = new odin.WebGPUInterface(memInterface);
+			const clipboardInterface = new odin.ClipboardInterface(memInterface);
+
+			odin.runWasm("cbor.wasm", null, {
+                wgpu:      wgpuInterface.getInterface(),
+				clipboard: clipboardInterface.getInterface(),
+				cbor: {
+					os_js_open: () => {
+						let input = document.createElement('input');
+						input.type = 'file';
+
+						input.onchange = () => {
+							const files = Array.from(input.files);
+							if (files.length && files[0]) {
+								readFile(files[0]);
+							}
+						};
+
+						input.click();
+					},
+					os_js_save: (namePtr, nameLength, dataPtr, dataLength) => {
+						const name = memInterface.loadString(namePtr, nameLength);
+						const data = memInterface.loadBytes(dataPtr, dataLength);
+
+						const file = new Blob([data]);
+						const a = document.createElement("a");
+						const url = URL.createObjectURL(file);
+						a.href = url;
+						a.download = name;
+						document.body.appendChild(a);
+						a.click();
+						setTimeout(() => {
+							document.body.removeChild(a);
+							window.URL.revokeObjectURL(url);
+						}, 0);
+					},
+				},
+            }, memInterface, /*intSize=8*/);
+		</script>
+	</body>
+</html>
