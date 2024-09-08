@@ -8,7 +8,7 @@ import fs "vendor:fontstash"
 
 import    "r"
 
-import clay "clay/bindings/odin/clay-odin"
+import clay "pkg/clay"
 
 Input :: struct {
     keys:     bit_set[Key],
@@ -50,57 +50,57 @@ Action :: enum {
 }
 
 // NOTE: can be improved, much hardcode, hacky way of doing tabs.
-cursor_to_buffer_idx :: proc() -> int {
-	cursor := linalg.to_f32(state.inp.cursor)
-
-	line_nr := cursor.y / 16
-	line_nr += f32(state.inp.scroll.y) / 16 / state.renderer.dpi
-
-	text := strings.to_string(state.builder)
-	idx: int
-	l: int
-	curr_line: string
-	for line in strings.split_lines_iterator(&text) {
-		if l == int(line_nr) {
-			curr_line = line
-			break
-		}
-		l += 1
-		idx += len(line)+1
-	}
-
-	txt := curr_line
-
-	r.fs_apply(&state.fs_renderer, size=16)
-	tab_width := r.fs_width(&state.fs_renderer, "    ")
-
-	at_x: f32
-	at_i: int
-	tabs: for tabbed in strings.split_after_iterator(&txt, "\t") {
-		tabbed := tabbed
-		if len(tabbed) > 0 && tabbed[0] == '\t' {
-			tabbed = tabbed[1:]
-			at_x += tab_width
-			if at_x >= f32(state.inp.cursor.x) * state.renderer.dpi {
-				break
-			}
-			at_i += 1
-		}
-
-		for iter := fs.TextIterInit(&state.fs_renderer.fs, at_x, 0, tabbed); true; {
-			quad: fs.Quad
-			fs.TextIterNext(&state.fs_renderer.fs, &iter, &quad) or_break
-			at_x = quad.x1
-			if at_x >= f32(state.inp.cursor.x) * state.renderer.dpi {
-				break tabs
-			}
-			at_i += 1
-		}
-	}
-	idx += at_i
-
-	return idx
-}
+// cursor_to_buffer_idx :: proc() -> int {
+// 	cursor := linalg.to_f32(state.inp.cursor)
+//
+// 	line_nr := cursor.y / 16
+// 	line_nr += f32(state.inp.scroll.y) / 16 / state.renderer.dpi
+//
+// 	text := strings.to_string(state.builder)
+// 	idx: int
+// 	l: int
+// 	curr_line: string
+// 	for line in strings.split_lines_iterator(&text) {
+// 		if l == int(line_nr) {
+// 			curr_line = line
+// 			break
+// 		}
+// 		l += 1
+// 		idx += len(line)+1
+// 	}
+//
+// 	txt := curr_line
+//
+// 	r.fs_apply(&state.fs_renderer, size=16)
+// 	tab_width := r.fs_width(&state.fs_renderer, "    ")
+//
+// 	at_x: f32
+// 	at_i: int
+// 	tabs: for tabbed in strings.split_after_iterator(&txt, "\t") {
+// 		tabbed := tabbed
+// 		if len(tabbed) > 0 && tabbed[0] == '\t' {
+// 			tabbed = tabbed[1:]
+// 			at_x += tab_width
+// 			if at_x >= f32(state.inp.cursor.x) * state.renderer.dpi {
+// 				break
+// 			}
+// 			at_i += 1
+// 		}
+//
+// 		for iter := fs.TextIterInit(&state.fs_renderer.fs, at_x, 0, tabbed); true; {
+// 			quad: fs.Quad
+// 			fs.TextIterNext(&state.fs_renderer.fs, &iter, &quad) or_break
+// 			at_x = quad.x1
+// 			if at_x >= f32(state.inp.cursor.x) * state.renderer.dpi {
+// 				break tabs
+// 			}
+// 			at_i += 1
+// 		}
+// 	}
+// 	idx += at_i
+//
+// 	return idx
+// }
 
 i_press_release :: proc(key: Key, action: Action) {
 	#partial switch key {
@@ -115,8 +115,8 @@ i_press_release :: proc(key: Key, action: Action) {
 			state.inp.keys     += {key}
 			state.inp.new_keys += {key}
 
-			idx := cursor_to_buffer_idx()
-			state.editor.selection = {idx, idx}
+			// idx := cursor_to_buffer_idx()
+			// state.editor.selection = {idx, idx}
 		case:
 			unreachable()
 		}
@@ -270,19 +270,16 @@ i_press_release :: proc(key: Key, action: Action) {
 i_move :: proc(pos: [2]i32) {
 	state.inp.cursor = pos
 
-	if .Mouse_Left in state.inp.keys {
-		idx := cursor_to_buffer_idx()
-		state.editor.selection[1] = idx
-	}
+	// if .Mouse_Left in state.inp.keys {
+	// 	idx := cursor_to_buffer_idx()
+	// 	state.editor.selection[1] = idx
+	// }
 
 	clay.SetPointerPosition(linalg.array_cast(state.inp.cursor, f32) * state.renderer.dpi)
 }
 
 i_scroll :: proc(delta: [2]f64) {
-	delta := delta
-	delta.y *= 4 // speed it up
-
-	state.inp.scroll += delta
+	state.inp.scroll = delta
 }
 
 i_char :: proc(ch: rune) {

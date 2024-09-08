@@ -12,17 +12,18 @@ import    "core:strconv"
 import    "core:math"
 
 import    "vendor:wgpu"
+import fs "vendor:fontstash"
 
 import    "r"
 
-import clay "clay/bindings/odin/clay-odin"
+import clay "pkg/clay"
 
 state: struct {
 	ctx:            runtime.Context,
 
 	os:             OS,
 
-    inp:            Input,
+	inp:            Input,
 
 	renderer:       r.Renderer,
 
@@ -195,11 +196,13 @@ frame :: proc(dt: f32) {
 
 	state.editor.current_time._nsec += i64(dt*1e9)
 
+	clay.UpdateScrollContainers(false, -linalg.array_cast(state.inp.scroll, f32), dt)
+	state.inp.scroll = 0
+
 	text := strings.to_string(state.builder)
 
-	fs := &state.fs_renderer
-	r.fs_apply(fs, size=16)
-	lh := r.fs_lh(fs)
+	r.fs_apply(&state.fs_renderer, size=16)
+	lh := r.fs_lh(&state.fs_renderer)
 
 	RED :: [4]f32{0, 0, 255, 255}
 
@@ -241,52 +244,115 @@ frame :: proc(dt: f32) {
 							os_save_as(data)
 						}
 					}
-				}
+				} // right
 			} // top
 
-			pos := -f32(state.inp.scroll.y)
-			r.fs_draw_text(fs, text, pos={0, pos}, size=16, color={166, 218, 149, 255}, align_v=.Top)
+			if clay.Scroll(clay.ID("content"), clay.Layout({ sizing = { width = clay.SizingGrow({}), height = clay.SizingGrow({}) }, layoutDirection = .TOP_TO_BOTTOM }), clay.ScrollConfig({ vertical = true })) {
+				caret, selection_end := edit.sorted_selection(&state.editor)
 
-			caret, selection_end := edit.sorted_selection(&state.editor)
+				line_i: u32
+				buf_i:  int
+				iter := text
+				for line in strings.split_lines_after_iterator(&iter) {
+					line_len := len(line)
+					line := strings.trim_right_space(line)
 
-			line := strings.count(text[:caret], "\n")
-			y := f32(line) * lh - f32(state.inp.scroll.y)
+					id := clay.IDI("line", line_i)
+					clay.Text(id, clay.MakeString(line), clay.TextConfig({ fontSize=16, textColor={166, 218, 149, 255}, fontId = u16(r.Font.Default) }))
 
-			current_line_start := max(0, strings.last_index_byte(text[:caret], '\n'))
-			current_line := strings.trim(text[current_line_start:caret], "\n")
-			x := r.fs_width(fs, current_line)
+					// Handle clicking.
+					if .Mouse_Left in state.inp.keys && clay.PointerOver(id) {
 
-			caret_pos := [2]f32{x, y}
-			append(&state.sprites, r.Sprite_Data{
-				location = {4*17, 2*17},
-				size     = {16, 16},
-				anchor   = {0, 0},
-				position = caret_pos,
-				scale    = {16/16, lh/16},
-				rotation = 0,
-				color    = 0xAAa6da95,
-			})
+						// NOTE: assuming the content starts at x 0.
 
-			if selection_end > caret {
-				selected := text[caret:selection_end]
-				start := caret_pos
-				for line in strings.split_lines_iterator(&selected) {
-					width := r.fs_width(&state.fs_renderer, line)
+						tab_width := r.fs_width(&state.fs_renderer, "    ")
 
-					append(&state.sprites, r.Sprite_Data{
-						location = {4*17, 2*17},
-						size     = {16, 16},
-						anchor   = {0, 0},
-						position = start,
-						scale    = {width/16, lh/16},
-						rotation = 0,
-						color    = 0x66a6da95,
-					})
+						at_x: f32
+						at_i: int
+						line_iter := line
+						tabs: for tabbed in strings.split_after_iterator(&line_iter, "\t") {
+							tabbed := tabbed
+							if len(tabbed) > 0 && tabbed[0] == '\t' {
+								tabbed = tabbed[1:]
+								at_x += tab_width
+								if at_x >= f32(state.inp.cursor.x) * state.renderer.dpi {
+									break
+								}
+								at_i += 1
+							}
 
-					start.x  = 0
-					start.y += lh
+							for iter := fs.TextIterInit(&state.fs_renderer.fs, at_x, 0, tabbed); true; {
+								quad: fs.Quad
+								fs.TextIterNext(&state.fs_renderer.fs, &iter, &quad) or_break
+								at_x = quad.x1
+								if at_x >= f32(state.inp.cursor.x) * state.renderer.dpi {
+									break tabs
+								}
+								at_i += 1
+							}
+						}
+
+						state.editor.selection = buf_i + at_i - 1
+					}
+
+					// Draw caret.
+					if buf_i <= caret && buf_i + line_len > caret {
+						column := caret - buf_i
+						width  := r.fs_width(&state.fs_renderer, line[:column])
+
+						if clay.Floating(clay.ID("caret-container"), clay.Layout({ sizing = { width = clay.SizingFixed(16), height = clay.SizingFixed(lh) } }), clay.FloatingConfig({ parentId = id, offset = { width, 0 } })) {
+							if clay.Rectangle(clay.ID("caret"), clay.Layout({ sizing = { width = clay.SizingGrow({}), height = clay.SizingGrow({}) } }), clay.RectangleConfig({ color = { 166, 218, 149, 177 } })) {}
+						}
+					}
+
+					line_i += 1
+					buf_i  += line_len
 				}
-			}
+			} // content
+
+			// pos := -f32(state.inp.scroll.y)
+			// r.fs_draw_text(fs, text, pos={0, pos}, size=16, color={166, 218, 149, 255}, align_v=.Top)
+			//
+			// caret, selection_end := edit.sorted_selection(&state.editor)
+			//
+			// line := strings.count(text[:caret], "\n")
+			// y := f32(line) * lh - f32(state.inp.scroll.y)
+			//
+			// current_line_start := max(0, strings.last_index_byte(text[:caret], '\n'))
+			// current_line := strings.trim(text[current_line_start:caret], "\n")
+			// x := r.fs_width(fs, current_line)
+			//
+			// caret_pos := [2]f32{x, y}
+			// append(&state.sprites, r.Sprite_Data{
+			// 	location = {4*17, 2*17},
+			// 	size     = {16, 16},
+			// 	anchor   = {0, 0},
+			// 	position = caret_pos,
+			// 	scale    = {16/16, lh/16},
+			// 	rotation = 0,
+			// 	color    = 0xAAa6da95,
+			// })
+			//
+			// if selection_end > caret {
+			// 	selected := text[caret:selection_end]
+			// 	start := caret_pos
+			// 	for line in strings.split_lines_iterator(&selected) {
+			// 		width := r.fs_width(&state.fs_renderer, line)
+			//
+			// 		append(&state.sprites, r.Sprite_Data{
+			// 			location = {4*17, 2*17},
+			// 			size     = {16, 16},
+			// 			anchor   = {0, 0},
+			// 			position = start,
+			// 			scale    = {width/16, lh/16},
+			// 			rotation = 0,
+			// 			color    = 0x66a6da95,
+			// 		})
+			//
+			// 		start.x  = 0
+			// 		start.y += lh
+			// 	}
+			// }
 
 			if clay.Rectangle(clay.ID("bottom"), clay.Layout({ sizing = { width = clay.SizingGrow({}), height = clay.SizingGrow({}) }, childAlignment = { x = .RIGHT, y = .BOTTOM } }), clay.RectangleConfig({})) {
 				// FPS over last 30 frames.
@@ -312,23 +378,16 @@ frame :: proc(dt: f32) {
 		SCROLLBAR_COLOR        :: [4]f32{244, 138, 173, 100}
 		SCROLLBAR_THUMB_COLOR  :: [4]f32{244, 138, 173, 255}
 		if clay.Rectangle(clay.ID("scrollbar"), clay.Layout({ sizing = { width = clay.SizingFixed(SCROLLBAR_WIDTH), height = clay.SizingGrow({}) }, layoutDirection = .TOP_TO_BOTTOM }), clay.RectangleConfig({ color = SCROLLBAR_COLOR })) {
-
-			lines      := f32(strings.count(text, "\n"))
-			max_scroll := f64((lines+1) * lh - sc_height)
-
-			// NOTE: clamping scroll, while we are technically in the drawing phase of the loop.
-			state.inp.scroll.y = clamp(state.inp.scroll.y, 0, max_scroll)
-
-			lines_scrolled := f32(state.inp.scroll.y) / lh
-			percentage     := clamp(lines_scrolled / (lines - sc_height / lh), 0, 1)
-			thumb_y        := percentage * sc_height - SCROLLBAR_THUMB_HEIGHT/2
-
-			fmt.println(thumb_y)
-
-			if clay.Rectangle(clay.ID("thumb-offset"), clay.Layout({ sizing = { height = clay.SizingFixed(thumb_y) } }), clay.RectangleConfig({})) {}
+			scroll := clay.GetScrollContainerData(clay.ID("content"))
+			max    := scroll.contentDimensions.height - scroll.scrollContainerDimensions.height
+			curr   := abs(scroll.scrollPosition.y)
+			perc   := curr / max
+			thumb  := perc * sc_height - SCROLLBAR_THUMB_HEIGHT
+			if clay.Rectangle(clay.ID("thumb-offset"), clay.Layout({ sizing = { height = clay.SizingFixed(thumb) } }), clay.RectangleConfig({})) {}
 			if clay.Rectangle(clay.ID("thumb"), clay.Layout({ sizing = { height = clay.SizingFixed(SCROLLBAR_THUMB_HEIGHT), width = clay.SizingGrow({}) } }), clay.RectangleConfig({ color = SCROLLBAR_THUMB_COLOR })) {}
 		} // scrollbar
 	} // screen
+
 	render_commands := clay.EndLayout(i32(_sc_width), i32(_sc_height))
 	r.clay_render(&render_commands)
 

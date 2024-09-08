@@ -5,7 +5,7 @@ import "base:runtime"
 import "core:log"
 import "core:math/linalg"
 
-import clay "../clay/bindings/odin/clay-odin"
+import clay "../pkg/clay"
 
 @(private="file")
 g_clay_font_renderer: ^Font_Renderer
@@ -76,6 +76,8 @@ clay_render :: proc(render_commands: ^clay.ClayArray(clay.RenderCommand)) {
 				})
 				assert(err == nil)
 			}
+
+		case .ScissorStart, .ScissorEnd:
 
 		case .None: fallthrough
 		case: 
